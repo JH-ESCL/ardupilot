@@ -148,7 +148,8 @@ void GCS_MAVLINK_Copter::send_position_target_global_int()
         0.0f, // yaw
         0.0f); // yaw_rate
 }
-
+// 2024-06-07 ws 기존의 send_position_target_local_ned 주석 처리
+/*
 void GCS_MAVLINK_Copter::send_position_target_local_ned()
 {
 #if MODE_GUIDED_ENABLED == ENABLED
@@ -210,6 +211,67 @@ void GCS_MAVLINK_Copter::send_position_target_local_ned()
         -target_accel.z,// afz in m/s/s NED frame
         0.0f, // yaw
         0.0f); // yaw_rate
+#endif
+}
+*/
+// 2024-06-07 ws send_position_target_local_ned 메소드를 POSHOLD 일 때에만 사용할 수 있도록 수정
+void GCS_MAVLINK_Copter::send_position_target_local_ned()
+{
+uint16_t type_mask = 0;
+#if MODE_POSHOLD_ENABLED == ENABLED
+    //type_mask = POSITION_TARGET_TYPEMASK_YAW_IGNORE| POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE;
+    // target_pos.x = copter.pos_control->get_pos_target_cm().tofloat().x * 0.01; // convert to metres
+    // target_pos.y = copter.pos_control->get_pos_target_cm().tofloat().y * 0.01;
+    // target_pos.z = copter.pos_control->get_pos_target_cm().tofloat().z * 0.01;
+    // target_vel.x = copter.pos_control->get_vel_desired_cms().tofloat().x * 0.01; // convert to metres/s
+    // target_vel.y = copter.pos_control->get_vel_desired_cms().tofloat().y * 0.01;
+    // target_vel.z = copter.pos_control->get_vel_desired_cms().tofloat().z * 0.01;
+    // target_accel.x = copter.pos_control->get_accel_target_cmss().tofloat().x * 0.01; // convert to metres/s/s
+    // target_accel.y = copter.pos_control->get_accel_target_cmss().tofloat().y * 0.01;
+    // target_accel.z = copter.pos_control->get_accel_target_cmss().tofloat().z * 0.01;
+
+    // mavlink_msg_position_target_local_ned_send(
+    //     chan,
+    //     AP_HAL::millis(), // time boot ms
+    //     MAV_FRAME_LOCAL_NED, 
+    //     type_mask,
+    //     target_pos.x,   // x in metres
+    //     target_pos.y,   // y in metres
+    //     -target_pos.z,  // z in metres NED frame
+    //     target_vel.x,   // vx in m/s
+    //     target_vel.y,   // vy in m/s
+    //     -target_vel.z,  // vz in m/s NED frame
+    //     target_accel.x, // afx in m/s/s
+    //     target_accel.y, // afy in m/s/s
+    //     -target_accel.z,// afz in m/s/s NED frame
+    //     0.0f, // yaw
+    //     0.0f); // yaw_rate
+    mavlink_msg_position_target_local_ned_send(
+    chan,
+    AP_HAL::millis(), // time boot ms
+    MAV_FRAME_LOCAL_NED, 
+    type_mask,
+    /*target_pos.x * 1.0e-2f,   // x in metres
+    target_pos.y * 1.0e-2f,   // y in metres
+    -target_pos.z * 1.0e-2f,  // z in metres NED frame
+    target_vel.x * 1.0e-2f,   // vx in m/s
+    target_vel.y * 1.0e-2f,   // vy in m/s
+    -target_vel.z * 1.0e-2f,  // vz in m/s NED frame
+    target_acc.x * 1.0e-2f, // afx in m/s/s
+    target_acc.y * 1.0e-2f, // afy in m/s/s
+    -target_acc.z * 1.0e-2f,// afz in m/s/s NED frame
+    */
+    copter.pos_control->get_pos_target_cm().x * 1.0e-2f,   // x in metres
+    copter.pos_control->get_pos_target_cm().y * 1.0e-2f,   // y in metres
+    -(copter.pos_control->get_pos_target_cm().z) * 1.0e-2f,  // z in metres NED frame
+    copter.pos_control->get_vel_desired_cms().x * 1.0e-2f,   // vx in m/s
+    copter.pos_control->get_vel_desired_cms().y * 1.0e-2f,   // vy in m/s
+    -(copter.pos_control->get_vel_desired_cms().z) * 1.0e-2f,  // vz in m/s NED frame
+    copter.pos_control->get_accel_target_cmss().x * 1.0e-2f, // afx in m/s/s
+    copter.pos_control->get_accel_target_cmss().y * 1.0e-2f, // afy in m/s/s
+    -(copter.pos_control->get_accel_target_cmss().z) * 1.0e-2f,// afz in m/s/s NED frame
+    0.0f, // yaw
+    0.0f); // yaw_rate
 #endif
 }
 
