@@ -1,23 +1,10 @@
-/*
- *  This program is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
-
-#include <stdlib.h>
-#include <AP_HAL/AP_HAL.h>
-#include <SRV_Channel/SRV_Channel.h>
-#include "AP_MotorsHeli_Single.h"
 #include <GCS_MAVLink/GCS.h>
+#include <RC_Channel/RC_Channel.h>
+#include <AP_Logger/AP_Logger.h>
+#include <AC_AttitudeControl/AC_AttitudeControl_Heli.h>
+#include "AP_InertialSensor/AP_InertialSensor.h"
+#include <AP_AHRS/AP_AHRS_View.h>
+#include <stdio.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -46,7 +33,13 @@ const AP_Param::GroupInfo AP_MotorsHeli_Single::var_info[] = {
 
     // Index 7 was used for phase angle and should not be used
 
-    // Indice 8 was used by COLYAW and should not be used
+    // @Param: COLYAW
+    // @DisplayName: Collective-Yaw Mixing
+    // @Description: Feed-forward compensation to automatically add rudder input when collective pitch is increased. Can be positive or negative depending on mechanics.
+    // @Range: -10 10
+    // @Increment: 0.1
+    // @User: Standard
+    AP_GROUPINFO("COLYAW", 8,  AP_MotorsHeli_Single, _collective_yaw_effect, 0),
 
     // @Param: FLYBAR_MODE
     // @DisplayName: Flybar Mode Selector
@@ -129,52 +122,23 @@ const AP_Param::GroupInfo AP_MotorsHeli_Single::var_info[] = {
     // @Increment: 1
     AP_SUBGROUPINFO(_swashplate, "SW_", 20, AP_MotorsHeli_Single, AP_MotorsHeli_Swash),
 
-    // @Param: COL2YAW
-    // @DisplayName: Collective-Yaw Mixing
-    // @Description: Feed-forward compensation to automatically add rudder input when collective pitch is increased. Can be positive or negative depending on mechanics.
-    // @Range: -2 2
-    // @Increment: 0.1
-    // @User: Standard
-    AP_GROUPINFO("COL2YAW", 21,  AP_MotorsHeli_Single, _collective_yaw_scale, 0),
+    // 011324 JH For Slow start for Tail
+    AP_GROUPINFO("SLST_AMP_P", 21, AP_MotorsHeli_Single, _slowstart_amplitude, 5.0f),
+    AP_GROUPINFO("SLST_TIME", 22, AP_MotorsHeli_Single, _slowstart_time, 2.0f),
 
-    // @Param: DDFP_THST_EXPO
-    // @DisplayName: DDFP Tail Rotor Thrust Curve Expo
-    // @Description: Tail rotor DDFP motor thrust curve exponent (0.0 for linear to 1.0 for second order curve)
-    // @Range: -1 1
-    // @User: Standard
+    // 010724 JH Add new parameters for excitation
+    AP_GROUPINFO("EXC_TIME", 23, AP_MotorsHeli_Single, _excitation_time, 0.0f),
+    AP_GROUPINFO("EXC_AMP", 24, AP_MotorsHeli_Single, _excitation_amplitude, 0.0f),
+    AP_GROUPINFO("EXC_ENABLE", 25, AP_MotorsHeli_Single, _excitation_enabled, 0),
+    AP_GROUPINFO("EXC_FAULT", 26, AP_MotorsHeli_Single, _fault_inj, 0),
+    AP_GROUPINFO("EXC_FAULT_P", 27, AP_MotorsHeli_Single, _fault_percent, 0.0f),
+    AP_GROUPINFO("EXC_TU", 28, AP_MotorsHeli_Single, _tu, 0.0125f),
+    AP_GROUPINFO("EXC_IMP", 29, AP_MotorsHeli_Single, _impulse_time, 0.0025f),
+    AP_GROUPINFO("EXC_XD", 30, AP_MotorsHeli_Single, _xd_on, 0.0f),
 
-    // @Param: DDFP_SPIN_MIN
-    // @DisplayName: DDFP Tail Rotor Motor Spin minimum
-    // @Description: Point at which the thrust starts expressed as a number from 0 to 1 in the entire output range.  Should be higher than MOT_SPIN_ARM.
-    // @Values: 0.0:Low, 0.15:Default, 0.3:High
-    // @User: Standard
-
-    // @Param: DDFP_SPIN_MAX
-    // @DisplayName: DDFP Tail Rotor Motor Spin maximum
-    // @Description: Point at which the thrust saturates expressed as a number from 0 to 1 in the entire output range
-    // @Values: 0.9:Low, 0.95:Default, 1.0:High
-    // @User: Standard
-
-    // @Param: DDFP_BAT_IDX
-    // @DisplayName: DDFP Tail Rotor Battery compensation index
-    // @Description: Which battery monitor should be used for doing compensation
-    // @Values: 0:First battery, 1:Second battery
-    // @User: Standard
-
-    // @Param: DDFP_BAT_V_MAX
-    // @DisplayName: Battery voltage compensation maximum voltage
-    // @Description: Battery voltage compensation maximum voltage (voltage above this will have no additional scaling effect on thrust).  Recommend 4.2 * cell count, 0 = Disabled
-    // @Range: 6 53
-    // @Units: V
-    // @User: Standard
-
-    // @Param: DDFP_BAT_V_MIN
-    // @DisplayName: Battery voltage compensation minimum voltage
-    // @Description: Battery voltage compensation minimum voltage (voltage below this will have no additional scaling effect on thrust).  Recommend 3.3 * cell count, 0 = Disabled
-    // @Range: 6 42
-    // @Units: V
-    // @User: Standard
-    AP_SUBGROUPINFO(thr_lin, "DDFP_", 22, AP_MotorsHeli_Single, Thrust_Linearization),
+    // 031724 JH System ID Chirp signal
+    // AP_GROUPINFO("ID_CHIRP_ON", 28, AP_MotorsHeli_Single, _id_chirp_on, 0),
+    // AP_GROUPINFO("FF_GAIN", 29, AP_MotorsHeli_Single, _ff_gain, 0.0f),
 
     AP_GROUPEND
 };
@@ -192,7 +156,18 @@ void AP_MotorsHeli_Single::set_update_rate( uint16_t speed_hz )
         1U << AP_MOTORS_MOT_1 |
         1U << AP_MOTORS_MOT_2 |
         1U << AP_MOTORS_MOT_3 |
-        1U << AP_MOTORS_MOT_4;
+        //JH 05_26_23 
+        //1U << AP_MOTORS_MOT_4;
+        1U << AP_MOTORS_MOT_4 |
+        //1U << AP_MOTORS_MOT_5 |
+        1U << AP_MOTORS_MOT_6 |
+        1U << AP_MOTORS_MOT_7 |
+        1U << AP_MOTORS_MOT_8 |
+        1U << AP_MOTORS_MOT_9 |
+        1U << AP_MOTORS_MOT_10 |
+        1U << AP_MOTORS_MOT_11 |
+        1U << AP_MOTORS_MOT_12;
+        //
     if (_swashplate.get_swash_type() == SWASHPLATE_TYPE_H4_90 || _swashplate.get_swash_type() == SWASHPLATE_TYPE_H4_45) {
         mask |= 1U << (AP_MOTORS_MOT_5);
     }
@@ -225,6 +200,21 @@ bool AP_MotorsHeli_Single::init_outputs()
         }
     }
 
+    // set signal value for main rotor external governor to know when to use autorotation bailout ramp up
+    if (_main_rotor._rsc_mode.get() == ROTOR_CONTROL_MODE_SETPOINT  ||  _main_rotor._rsc_mode.get() == ROTOR_CONTROL_MODE_PASSTHROUGH) {
+        _main_rotor.set_ext_gov_arot_bail(_main_rotor._ext_gov_arot_pct.get());
+    } else {
+        _main_rotor.set_ext_gov_arot_bail(0);
+    }
+
+    // set signal value for tail rotor external governor to know when to use autorotation bailout ramp up
+    if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPIT_EXT_GOV) {
+        // set point for tail rsc is the same as for main rotor to save on parameters
+        _tail_rotor.set_ext_gov_arot_bail(_main_rotor._ext_gov_arot_pct.get());
+    } else {
+        _tail_rotor.set_ext_gov_arot_bail(0);
+    }
+
     if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_SERVO_EXTGYRO) {
         // External Gyro uses PWM output thus servo endpoints are forced
         SRV_Channels::set_output_min_max(SRV_Channels::get_motor_function(AP_MOTORS_HELI_SINGLE_EXTGYRO), 1000, 2000);
@@ -238,10 +228,17 @@ bool AP_MotorsHeli_Single::init_outputs()
         reset_swash_servo(SRV_Channels::get_motor_function(4));
     }
 
-    if (_tail_type != AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPITCH && _tail_type != AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPIT_EXT_GOV) {
-        // yaw servo is an angle from -4500 to 4500
-        SRV_Channels::set_angle(SRV_Channel::k_motor4, YAW_SERVO_MAX_ANGLE);
-    }
+    // yaw servo is an angle from -4500 to 4500
+    SRV_Channels::set_angle(SRV_Channel::k_motor4, YAW_SERVO_MAX_ANGLE);
+    //JH 05_22_23
+     SRV_Channels::set_angle(SRV_Channel::k_motor6, YAW_SERVO_MAX_ANGLE);
+     SRV_Channels::set_angle(SRV_Channel::k_motor7, YAW_SERVO_MAX_ANGLE);
+     SRV_Channels::set_angle(SRV_Channel::k_motor9, YAW_SERVO_MAX_ANGLE);
+     SRV_Channels::set_angle(SRV_Channel::k_motor10, YAW_SERVO_MAX_ANGLE);
+     //NSE 
+     SRV_Channels::set_angle(SRV_Channel::k_motor11, YAW_SERVO_MAX_ANGLE); 
+     SRV_Channels::set_angle(SRV_Channel::k_motor12, YAW_SERVO_MAX_ANGLE); 
+
 
     set_initialised_ok(_frame_class == MOTOR_FRAME_HELI);
 
@@ -277,6 +274,17 @@ void AP_MotorsHeli_Single::_output_test_seq(uint8_t motor_seq, int16_t pwm)
                 }
             }
             rc_write(AP_MOTORS_MOT_4, pwm);
+            //JH 05_12_23 
+             rc_write(AP_MOTORS_MOT_6, pwm);
+             rc_write(AP_MOTORS_MOT_7, pwm);
+             rc_write(AP_MOTORS_MOT_9, pwm);
+             rc_write(AP_MOTORS_MOT_10, pwm);
+            
+            //NSE
+             rc_write(AP_MOTORS_MOT_11, pwm);
+             rc_write(AP_MOTORS_MOT_12, pwm);
+
+            //
             break;
         case 5:
             // main rotor
@@ -315,22 +323,22 @@ void AP_MotorsHeli_Single::calculate_armed_scalars()
         _main_rotor._rsc_mode.save();
         _heliflags.save_rsc_mode = false;
     }
-	
+
+    // set bailout ramp time
+    _main_rotor.use_bailout_ramp_time(_heliflags.enable_bailout);
+    _tail_rotor.use_bailout_ramp_time(_heliflags.enable_bailout);
+
     // allow use of external governor autorotation bailout
-    if (_heliflags.in_autorotation) {        
-        _main_rotor.set_autorotation_flag(_heliflags.in_autorotation);
-        // set bailout ramp time
-        _main_rotor.use_bailout_ramp_time(_heliflags.enable_bailout);
-        if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPITCH || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPIT_EXT_GOV) {
-            _tail_rotor.set_autorotation_flag(_heliflags.in_autorotation);
-            _tail_rotor.use_bailout_ramp_time(_heliflags.enable_bailout);
+    if (_main_rotor._ext_gov_arot_pct.get() > 0) {
+        // RSC only needs to know that the vehicle is in an autorotation if using the bailout window on an external governor
+        if (_main_rotor._rsc_mode.get() == ROTOR_CONTROL_MODE_SETPOINT  ||  _main_rotor._rsc_mode.get() == ROTOR_CONTROL_MODE_PASSTHROUGH) {
+            _main_rotor.set_autorotation_flag(_heliflags.in_autorotation);
         }
-    }else { 
-        _main_rotor.set_autorotation_flag(false);
-        if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPITCH || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPIT_EXT_GOV) {
-            _tail_rotor.set_autorotation_flag(false);
+        if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPIT_EXT_GOV) {
+            _tail_rotor.set_autorotation_flag(_heliflags.in_autorotation);
         }
     }
+
 }
 
 // calculate_scalars - recalculates various scalers used.
@@ -372,18 +380,12 @@ void AP_MotorsHeli_Single::calculate_scalars()
         _tail_rotor.set_runup_time(_main_rotor._runup_time.get());
         _tail_rotor.set_critical_speed(_main_rotor._critical_speed.get());
         _tail_rotor.set_idle_output(_main_rotor._idle_output.get());
-        _tail_rotor.set_arot_idle_output(_main_rotor._arot_idle_output.get());
-        _tail_rotor.set_rsc_arot_man_enable(_main_rotor._rsc_arot_man_enable.get());
-        _tail_rotor.set_rsc_arot_engage_time(_main_rotor._rsc_arot_engage_time.get());
     } else {
         _tail_rotor.set_control_mode(ROTOR_CONTROL_MODE_DISABLED);
         _tail_rotor.set_ramp_time(0);
         _tail_rotor.set_runup_time(0);
         _tail_rotor.set_critical_speed(0);
         _tail_rotor.set_idle_output(0);
-        _tail_rotor.set_arot_idle_output(0);
-        _tail_rotor.set_rsc_arot_man_enable(0);
-        _tail_rotor.set_rsc_arot_engage_time(0);
     }
 }
 
@@ -391,7 +393,25 @@ void AP_MotorsHeli_Single::calculate_scalars()
 //  this can be used to ensure other pwm outputs (i.e. for servos) do not conflict
 uint32_t AP_MotorsHeli_Single::get_motor_mask()
 {
-    return _main_rotor.get_output_mask() | _tail_rotor.get_output_mask();
+    // heli uses channels 1,2,3,4 and 8
+    // setup fast channels
+    //JH 05_26_23
+    //uint32_t mask = 1U << 0 | 1U << 1 | 1U << 2 | 1U << 3 | 1U << AP_MOTORS_HELI_RSC;
+     uint32_t mask = 1U << 0 | 1U << 1 | 1U << 2 | 1U << 3 | 1U << AP_MOTORS_HELI_RSC | 1U << 4 | 1U << 5 | 1U << 6 | 1U << 8 | 1U << 9| 1U << 10| 1U << 11;
+    //
+    if (_swashplate.get_swash_type() == SWASHPLATE_TYPE_H4_90 || _swashplate.get_swash_type() == SWASHPLATE_TYPE_H4_45) {
+        mask |= 1U << 4;
+    }
+
+    if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_SERVO_EXTGYRO) {
+        mask |= 1U << AP_MOTORS_HELI_SINGLE_EXTGYRO;
+    }
+
+    if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPITCH || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_VARPIT_EXT_GOV) {
+        mask |= 1U << AP_MOTORS_HELI_SINGLE_TAILRSC;
+    }
+
+    return motor_mask_to_srv_channel_mask(mask);
 }
 
 // update_motor_controls - sends commands to motor controllers
@@ -451,7 +471,7 @@ void AP_MotorsHeli_Single::move_actuators(float roll_out, float pitch_out, float
     }
 
     // constrain collective input
-    float collective_out = coll_in;
+    collective_out = coll_in;
     if (collective_out <= 0.0f) {
         collective_out = 0.0f;
         limit.throttle_lower = true;
@@ -483,12 +503,11 @@ void AP_MotorsHeli_Single::move_actuators(float roll_out, float pitch_out, float
         // rudder feed forward based on collective
         // the feed-forward is not required when the motor is stopped or at idle, and thus not creating torque
         // also not required if we are using external gyro
-        if ((get_control_output() > _main_rotor.get_idle_output()) && _tail_type != AP_MOTORS_HELI_SINGLE_TAILTYPE_SERVO_EXTGYRO) {
-            // sanity check collective_yaw_scale
-            _collective_yaw_scale.set(constrain_float(_collective_yaw_scale, -AP_MOTORS_HELI_SINGLE_COLYAW_RANGE, AP_MOTORS_HELI_SINGLE_COLYAW_RANGE));
-            // This feedforward compensation follows the hover performance theory that hover power required
-            // is a function of gross weight to the 3/2 power
-            yaw_offset = _collective_yaw_scale * powf(fabsf(collective_out - _collective_zero_thrust_pct),1.5f);
+        if ((_main_rotor.get_control_output() > _main_rotor.get_idle_output()) && _tail_type != AP_MOTORS_HELI_SINGLE_TAILTYPE_SERVO_EXTGYRO) {
+            // sanity check collective_yaw_effect
+            _collective_yaw_effect.set(constrain_float(_collective_yaw_effect, -AP_MOTORS_HELI_SINGLE_COLYAW_RANGE, AP_MOTORS_HELI_SINGLE_COLYAW_RANGE));
+            // the 4.5 scaling factor is to bring the values in line with previous releases
+            yaw_offset = _collective_yaw_effect * fabsf(collective_out - _collective_zero_thrust_pct) / 4.5f;
         }
     } else {
         yaw_offset = 0.0f;
@@ -502,6 +521,50 @@ void AP_MotorsHeli_Single::move_actuators(float roll_out, float pitch_out, float
     // scale collective pitch for swashplate servos
     float collective_scalar = ((float)(_collective_max-_collective_min))*0.001f;
     float collective_out_scaled = collective_out * collective_scalar + (_collective_min - 1000)*0.001f;
+
+
+    // // JH 20240317 Chirp Signal for System ID
+    // float current_time = AP_HAL::millis() / 1000.0f;
+    
+    // if (_id_chirp_on && !_inject_chirp) {
+    //     _inject_chirp = true;
+    //     _chirp_start_time = current_time;
+    // }
+    
+    // // If chirp injection is active, modify the servo outputs
+    // if (_inject_chirp) {
+    //     float chirp_time = current_time - _chirp_start_time;
+    //     // Define your chirp parameters
+    //     float f0 = 4.0f; // initial frequency sec
+    //     float f1 = 0.25f; // final frequency sec
+    //     float t1 = 50.0f; // duration sec
+    //     float amp = 0.3f; // amplitude
+
+    //     // Apply chirp signal based on the current phase
+    //     if (chirp_time >= 0 && chirp_time <= 50) {
+    //         if (chirp_time <= 50) {
+    //             // Apply chirp to all controls during the first phase
+    //             //roll_out += amp * sin(2 * M_PI * (f0 + (f1 - f0) * (chirp_time / t1)) * chirp_time);
+    //             //pitch_out += amp * sin(2 * M_PI * (f0 + (f1 - f0) * (chirp_time / t1)) * chirp_time);
+    //             //yaw_out += amp * sin(2 * M_PI * (f0 + (f1 - f0) * (chirp_time / t1)) * chirp_time);
+    //             yaw_out += 0.00000000001* amp * sin(2 * M_PI * (f0 + (f1 - f0) * (chirp_time / t1)) * chirp_time);
+    //         } 
+    //         /*else if (chirp_time <= 10) {
+    //             // Apply chirp only to roll during the second phase
+    //             roll_out += amp * sin(2 * M_PI * (f0 + (f1 - f0) * ((chirp_time - 5) / t1)) * (chirp_time - 5));
+    //         } else if (chirp_time <= 15) {
+    //             // Apply chirp only to pitch during the third phase
+    //             pitch_out += amp * sin(2 * M_PI * (f0 + (f1 - f0) * ((chirp_time - 10) / t1)) * (chirp_time - 10));
+    //         } else {
+    //             // Apply chirp only to yaw during the fourth phase
+    //             yaw_out += 0.1f * sin(2 * M_PI * (f0 + (f1 - f0) * ((chirp_time - 15) / t1)) * (chirp_time - 15));
+    //         }*/
+    //     } else if (chirp_time > 50) {
+    //         // Stop injection after the sequence completes
+    //         _inject_chirp = false;
+    //     }
+    // }
+
 
     // get servo positions from swashplate library
     _servo1_out = _swashplate.get_servo_out(CH_1,pitch_out,roll_out,collective_out_scaled);
@@ -529,6 +592,31 @@ void AP_MotorsHeli_Single::move_yaw(float yaw_out)
     }
 
     _servo4_out = yaw_out;
+}
+
+// 가우시안 난수 생성기 (Box-Muller 변환)
+float randn(float mean = 0.0f, float stddev = 1.0f)
+{
+    static bool has_spare = false;
+    static float spare;
+
+    if (has_spare) {
+        has_spare = false;
+        return spare * stddev + mean;
+    }
+
+    has_spare = true;
+
+    float u, v, s;
+    do {
+        u = (rand() / (float)RAND_MAX) * 2.0f - 1.0f; // -1과 1 사이의 난수
+        v = (rand() / (float)RAND_MAX) * 2.0f - 1.0f; // -1과 1 사이의 난수
+        s = u * u + v * v;
+    } while (s >= 1.0f); // 원 안에 있는 값만 사용
+
+    s = sqrtf(-2.0f * logf(s) / s);
+    spare = v * s;
+    return u * s * stddev + mean;
 }
 
 void AP_MotorsHeli_Single::output_to_motors()
@@ -560,72 +648,340 @@ void AP_MotorsHeli_Single::output_to_motors()
     if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CCW) {
         _servo4_out = -_servo4_out;
     }
+    // JH 20240115 Reverse PWM 
+        _servo4_out = -_servo4_out;
+        // _servo4_out = _servo4_out + _ff_gain*KM*collective_out/KT; // Feedforward compensation
+    
+    if (matrix_type == 1) { // Bn
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                Bn[i][j] = matrix_value[i * 3 + j];
+            }
+        }
+    }
 
-    if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CW || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CCW){
-        // calc filtered battery voltage and lift_max
-        thr_lin.update_lift_max_from_batt_voltage();
+    if (matrix_type == 2) { // Bv_inv
+        for (int i = 0; i < 4; ++i) {
+            Bv_inv[i] = matrix_value[i];
+        }
+    }
+
+
+    float current_debug_time = AP_HAL::millis() * 0.001f; // current time in seconds
+    if ((current_debug_time - last_debug_time) >= 1.0f) { // Check if 1 second has passed
+        last_debug_time = current_debug_time; // Update last_debug_time
+
+        // Create the message and send it
+        char buf[100];
+        snprintf(buf, sizeof(buf), "Data: [%.1f, %.1f,%.1f,%.1f,%.1f]", 
+                Bn[0][0], Bv_inv[0], Bv_inv[1], Bv_inv[2], Bv_inv[3]);
+        gcs().send_text(MAV_SEVERITY_INFO, "%s", buf);
     }
 
     switch (_spool_state) {
         case SpoolState::SHUT_DOWN:
             // sends minimum values out to the motors
             update_motor_control(ROTOR_CONTROL_STOP);
+            //JH 05_22_23
+             rc_write_angle(AP_MOTORS_MOT_6, -YAW_SERVO_MAX_ANGLE);
+             rc_write_angle(AP_MOTORS_MOT_7, -YAW_SERVO_MAX_ANGLE);
+             rc_write_angle(AP_MOTORS_MOT_9, -YAW_SERVO_MAX_ANGLE);
+             rc_write_angle(AP_MOTORS_MOT_10, -YAW_SERVO_MAX_ANGLE);
+            //NSE
+             rc_write_angle(AP_MOTORS_MOT_11, -YAW_SERVO_MAX_ANGLE);
+             rc_write_angle(AP_MOTORS_MOT_12, -YAW_SERVO_MAX_ANGLE);
+            
+             check_init = 1;
+           //
+            
             if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CW || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CCW){
-                rc_write(AP_MOTORS_MOT_4, calculate_ddfp_output(0.0f));
+                rc_write_angle(AP_MOTORS_MOT_4, -YAW_SERVO_MAX_ANGLE);
             }
             break;
         case SpoolState::GROUND_IDLE:
             // sends idle output to motors when armed. rotor could be static or turning (autorotation)
             update_motor_control(ROTOR_CONTROL_IDLE);
+
             if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CW || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CCW){
-                rc_write(AP_MOTORS_MOT_4, calculate_ddfp_output(0.0f));
+                rc_write_angle(AP_MOTORS_MOT_4, -YAW_SERVO_MAX_ANGLE);
             }
             break;
         case SpoolState::SPOOLING_UP:
         case SpoolState::THROTTLE_UNLIMITED:
             // set motor output based on thrust requests
             update_motor_control(ROTOR_CONTROL_ACTIVE);
+
+            //JH 01_13_24 Slow start IDLE for tail rotor 900pwm
+            if(check_init==1){ // Idle
+               static float time_now_init = -1.0f; // Static variable to store the start time
+                if (time_now_init < 0) {
+                    time_now_init = AP_HAL::millis() * 0.001f; // Set start time on the first iteration
+                }
+                float time_now = AP_HAL::millis() * 0.001f - time_now_init; // converting milliseconds to seconds
+                time_div_startime= fmod(time_now, _slowstart_time*5)+0.01f;
+                if(time_div_startime >= 0.0f && time_div_startime <= _slowstart_time){
+                    rc_write_angle(AP_MOTORS_MOT_6, -YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7, -YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9, -YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, -YAW_SERVO_MAX_ANGLE);
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11, -YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, -YAW_SERVO_MAX_ANGLE);
+                }else if(time_div_startime > _slowstart_time && time_div_startime <= _slowstart_time*2){
+                    rc_write_angle(AP_MOTORS_MOT_6,(-1.0+(2*_slowstart_amplitude/100)*(time_div_startime-_slowstart_time)/_slowstart_time)*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7, -YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9, -YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, -YAW_SERVO_MAX_ANGLE);
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11, (-1.0+(2*_slowstart_amplitude/100)*(time_div_startime-_slowstart_time)/_slowstart_time)*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, -YAW_SERVO_MAX_ANGLE);
+                }else if(time_div_startime > _slowstart_time*2 && time_div_startime <= _slowstart_time*3){
+                    rc_write_angle(AP_MOTORS_MOT_6, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7, (-1.0+(2*_slowstart_amplitude/100)*(time_div_startime-_slowstart_time*2)/_slowstart_time)*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9, -YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, -YAW_SERVO_MAX_ANGLE);
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, (-1.0+(2*_slowstart_amplitude/100)*(time_div_startime-_slowstart_time*2)/_slowstart_time)*YAW_SERVO_MAX_ANGLE);
+
+                }else if(time_div_startime > _slowstart_time*3 && time_div_startime <= _slowstart_time*4){
+                    rc_write_angle(AP_MOTORS_MOT_6, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9, (-1.0+(2*_slowstart_amplitude/100)*(time_div_startime-_slowstart_time*3)/_slowstart_time)*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, -YAW_SERVO_MAX_ANGLE);
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+
+                }else if(time_div_startime > _slowstart_time*4 && time_div_startime < _slowstart_time*5 ){
+                    rc_write_angle(AP_MOTORS_MOT_6, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, (-1.0+(2*_slowstart_amplitude/100)*(time_div_startime-_slowstart_time*4)/_slowstart_time)*YAW_SERVO_MAX_ANGLE);
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11,(-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                }else{
+                    check_init = 0;
+                }
+            } 
+            if(check_init == 0){ // Take off
+            //JH 01_08_24 Null space Excitation
+            if (_excitation_enabled==1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         { //step inj
+                _servo4_out = constrain_float(_servo4_out, -0.8f, 1.0f);
+                // Calculate excitation value based on current time and frequency
+                float time_now = AP_HAL::millis() * 0.001f; // converting milliseconds to seconds
+                //float t = time_now % (_excitation_time*4);
+
+                // float t = fmod(time_now, _excitation_time * 3 + Tn);
+                float t = fmod(time_now, _excitation_time * 3+ _tu);
+
+                // NSE TIME
+                if (t > 0 && t <= _impulse_time  ){
+                    
+                    _servo4_out_1 = 4*Bv_inv[0]*_servo4_out+Bn[0][0]*_excitation_amplitude;
+                    _servo4_out_2 = 4*Bv_inv[1]*_servo4_out+Bn[1][0]*_excitation_amplitude;
+                    _servo4_out_3 = 4*Bv_inv[2]*_servo4_out+Bn[2][0]*_excitation_amplitude;
+                    _servo4_out_4 = 4*Bv_inv[3]*_servo4_out+Bn[3][0]*_excitation_amplitude;
+
+                    _servo4_out_5_ = _servo4_out_1;
+                    _servo4_out_6_ = _servo4_out_2;
+                    _servo4_out_5 = _servo4_out_5_;                       
+                    _servo4_out_6 = _servo4_out_6_;   
+
+                    if (!is_xdrand_calculated) { // Check if it's the first time entering this condition
+                        xdrand = _xd_on * randn(0.0, 1.0); // Perform the calculation
+                        is_xdrand_calculated = true; // Set the flag to true
+                    }        
+                    //xdrand = 0.0;                                
+                }
+                else if(t > _excitation_time && t <= _excitation_time + _impulse_time){
+                    // Apply excitation to the servo output
+                    _servo4_out_1 = 4*Bv_inv[0]*_servo4_out+Bn[0][1]*_excitation_amplitude;
+                    _servo4_out_2 = 4*Bv_inv[1]*_servo4_out+Bn[1][1]*_excitation_amplitude;
+                    _servo4_out_3 = 4*Bv_inv[2]*_servo4_out+Bn[2][1]*_excitation_amplitude;
+                    _servo4_out_4 = 4*Bv_inv[3]*_servo4_out+Bn[3][1]*_excitation_amplitude;
+                    
+                    _servo4_out_5_ = _servo4_out_1;
+                    _servo4_out_6_ = _servo4_out_2;
+                    _servo4_out_5 = _servo4_out_5_;                       
+                    _servo4_out_6 = _servo4_out_6_;  
+
+                    //xdrand = 0.0;                                
+                }
+                else if(t > _excitation_time * 2 && t <= _excitation_time * 2+ _impulse_time){
+                    // Apply excitation to the servo output
+                    _servo4_out_1 = 4*Bv_inv[0]*_servo4_out+Bn[0][2]*_excitation_amplitude;
+                    _servo4_out_2 = 4*Bv_inv[1]*_servo4_out+Bn[1][2]*_excitation_amplitude;
+                    _servo4_out_3 = 4*Bv_inv[2]*_servo4_out+Bn[2][2]*_excitation_amplitude;
+                    _servo4_out_4 = 4*Bv_inv[3]*_servo4_out+Bn[3][2]*_excitation_amplitude;
+                    
+                    _servo4_out_5_ = _servo4_out_1;
+                    _servo4_out_6_ = _servo4_out_2;
+                    _servo4_out_5 = _servo4_out_5_;                       
+                    _servo4_out_6 = _servo4_out_6_;      
+
+                    //xdrand = 0.0;                                
+
+                }
+
+                // Only control input
+                //else if(t > _excitation_time * 3 && t <= _excitation_time * 4){
+                else if(t > _excitation_time * 3 && t <= _excitation_time * 3+_tu){
+                    // Apply excitation to the servo output
+                    _servo4_out_1 = 4*Bv_inv[0]*_servo4_out;
+                    _servo4_out_2 = 4*Bv_inv[1]*_servo4_out;
+                    _servo4_out_3 = 4*Bv_inv[2]*_servo4_out;
+                    _servo4_out_4 = 4*Bv_inv[2]*_servo4_out;
+                    
+                    _servo4_out_5_ = _servo4_out_1;
+                    _servo4_out_6_ = _servo4_out_2;
+                    _servo4_out_5 = _servo4_out_5_;                       
+                    _servo4_out_6 = _servo4_out_6_;      
+
+                    is_xdrand_calculated = false; // random input is calculated again
+
+                     
+
+                }else{
+                    _servo4_out_1 = 4*Bv_inv[0]*_servo4_out;
+                    _servo4_out_2 = 4*Bv_inv[1]*_servo4_out;
+                    _servo4_out_3 = 4*Bv_inv[2]*_servo4_out;
+                    _servo4_out_4 = 4*Bv_inv[3]*_servo4_out;
+
+                    _servo4_out_5_ = _servo4_out_1;
+                    _servo4_out_6_ = _servo4_out_2;
+                    _servo4_out_5 = _servo4_out_5_;                       
+                    _servo4_out_6 = _servo4_out_6_;  
+
+                    //xdrand = 0.0;                                
+
+                }
+                // JH 01_08_24 Fault Injection Part
+                if(_fault_inj == 1){
+                    _servo4_out_5 = _servo4_out_5_;
+                    _servo4_out_1 = -1.0f + (_servo4_out_1 / 2 * _fault_percent);
+                }else if(_fault_inj == 2){ //not used
+                    _servo4_out_6 = _servo4_out_6_;
+                    _servo4_out_2 = -1.0f + (_servo4_out_2 / 2 * _fault_percent);
+                }else if(_fault_inj == 3){ //not used
+                    _servo4_out_3 = -1.0f + (_servo4_out_3 / 2 * _fault_percent);
+                }else if(_fault_inj == 4){ //not used
+                    _servo4_out_4 = -1.0f + (_servo4_out_4 / 2 * _fault_percent);
+                }else if(_fault_inj == 12 || _fault_inj == 21){ 
+                    _servo4_out_5 = _servo4_out_5_;
+                    _servo4_out_6 = _servo4_out_6_;
+                    _servo4_out_1 = -1.0f + (_servo4_out_1 / 2 * _fault_percent);
+                    _servo4_out_2 = -1.0f + (_servo4_out_2 / 2 * _fault_percent);
+                }else if(_fault_inj == 13 || _fault_inj == 31){//not used
+                    _servo4_out_5 = _servo4_out_5_;
+                    _servo4_out_1 = -1.0f + (_servo4_out_1 / 2 * _fault_percent);
+                    _servo4_out_3 = -1.0f + (_servo4_out_3 / 2 * _fault_percent);
+                }else if(_fault_inj == 14 || _fault_inj == 41){//not used
+                    _servo4_out_5 = _servo4_out_5_;
+                    _servo4_out_1 = -1.0f + (_servo4_out_1 / 2 * _fault_percent);
+                    _servo4_out_4 = -1.0f + (_servo4_out_4 / 2 * _fault_percent);
+                }else if(_fault_inj == 23 || _fault_inj == 32){//not used
+                    _servo4_out_6 = _servo4_out_6_;
+                    _servo4_out_2 = -1.0f + (_servo4_out_2 / 2 * _fault_percent);
+                    _servo4_out_3 = -1.0f + (_servo4_out_3 / 2 * _fault_percent);
+                }else if(_fault_inj == 24 || _fault_inj == 42){//not used
+                    _servo4_out_6 = _servo4_out_6_;
+                    _servo4_out_2 = -1.0f + (_servo4_out_2 / 2 * _fault_percent);
+                    _servo4_out_4 = -1.0f + (_servo4_out_4 / 2 * _fault_percent);
+                }else if(_fault_inj == 34 || _fault_inj == 43){//not used
+                    _servo4_out_3 = -1.0f + (_servo4_out_3 / 2 * _fault_percent);
+                    _servo4_out_4 = -1.0f + (_servo4_out_4 / 2 * _fault_percent);
+                }
+                
+                if (collective_out > 0.02){
+                    rc_write_angle(AP_MOTORS_MOT_6,  _servo4_out_1 * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7,  _servo4_out_2 * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9,  _servo4_out_3 * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, _servo4_out_4 * YAW_SERVO_MAX_ANGLE);
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11,  _servo4_out_5 * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, _servo4_out_6 * YAW_SERVO_MAX_ANGLE);                    
+                }
+            }
+ 
+            else{     
+               
+            //JH 01_15_24
+            if (collective_out > 0.02){
+                float time_init = AP_HAL::millis() * 0.001f - time_init_init; // converting milliseconds to seconds
+                time_init = fmod(time_init,_slowstart_time*2);
+                init_servo4_out = (-1.0f+(2*_slowstart_amplitude/100));
+                if(time_init >=0.0f && time_init<_slowstart_time && check_ignition == 1){
+                    rc_write_angle(AP_MOTORS_MOT_6, init_servo4_out*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7, init_servo4_out*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9, init_servo4_out*YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, init_servo4_out*YAW_SERVO_MAX_ANGLE);
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11, init_servo4_out * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, init_servo4_out * YAW_SERVO_MAX_ANGLE); 
+                }else if (time_init>=_slowstart_time && time_init<2*_slowstart_time-0.01 && check_ignition == 1){
+                    //init_servo4_out_ = (-init_servo4_out-1.0f)*time_init/_slowstart_time+init_servo4_out;
+                    //init_servo4_out = constrain_float(init_servo4_out_,-1.0f,init_servo4_out);
+                    _servo4_out = constrain_float(_servo4_out, -0.8f, 1.0f);
+                    rc_write_angle(AP_MOTORS_MOT_6,((_servo4_out-init_servo4_out)*(time_init-_slowstart_time)/_slowstart_time+init_servo4_out) * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7, ((_servo4_out-init_servo4_out)*(time_init-_slowstart_time)/_slowstart_time+init_servo4_out) * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9, ((_servo4_out-init_servo4_out)*(time_init-_slowstart_time)/_slowstart_time+init_servo4_out) * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, ((_servo4_out-init_servo4_out)*(time_init-_slowstart_time)/_slowstart_time+init_servo4_out) * YAW_SERVO_MAX_ANGLE); 
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11, ((_servo4_out-init_servo4_out)*(time_init-_slowstart_time)/_slowstart_time+init_servo4_out) * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, ((_servo4_out-init_servo4_out)*(time_init-_slowstart_time)/_slowstart_time+init_servo4_out) * YAW_SERVO_MAX_ANGLE); 
+                }else{
+                   _servo4_out = constrain_float(_servo4_out, -0.8f, 1.0f);
+                    rc_write_angle(AP_MOTORS_MOT_6, _servo4_out * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_7, _servo4_out * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_9, _servo4_out * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_10, _servo4_out * YAW_SERVO_MAX_ANGLE); 
+                    //NSE
+                    rc_write_angle(AP_MOTORS_MOT_11, _servo4_out * YAW_SERVO_MAX_ANGLE);
+                    rc_write_angle(AP_MOTORS_MOT_12, _servo4_out * YAW_SERVO_MAX_ANGLE); 
+                    check_ignition = 0;
+                }
+            }else{
+                time_init_init =  AP_HAL::millis() * 0.001f;
+                check_ignition = 1;
+                rc_write_angle(AP_MOTORS_MOT_6, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                rc_write_angle(AP_MOTORS_MOT_7, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                rc_write_angle(AP_MOTORS_MOT_9, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                rc_write_angle(AP_MOTORS_MOT_10, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                //NSE
+                rc_write_angle(AP_MOTORS_MOT_11, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE);
+                rc_write_angle(AP_MOTORS_MOT_12, (-1.0+(2*_slowstart_amplitude/100))*YAW_SERVO_MAX_ANGLE); 
+           }
+        }
+    }
+
+            //
             if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CW || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CCW){
-                SRV_Channel *c = SRV_Channels::srv_channel(AP_MOTORS_MOT_4);
-                if (c != nullptr) {
-                    _ddfp_pwm_min = c->get_output_min();
-                    _ddfp_pwm_max = c->get_output_max();
-                    _ddfp_pwm_trim = c->get_trim();
-                }
-                float servo_out = 0.0f;
-                if (is_positive((float) (_ddfp_pwm_max - _ddfp_pwm_min))) {
-                    float servo4_trim = constrain_float((_ddfp_pwm_trim - 1000) / (_ddfp_pwm_max - _ddfp_pwm_min), 0.0f, 1.0f);
-                    if (is_positive(_servo4_out)) {
-                        servo_out = (1.0f - servo4_trim) * _servo4_out + servo4_trim;
-                    } else {
-                        servo_out = servo4_trim * _servo4_out + servo4_trim;
-                    }
-                } else {
-                    // if servo pwm min and max are bad, convert servo4_out from -1 to 1 to 0 to 1
-                    servo_out = 0.5f * (_servo4_out + 1.0f);
-                    // this should never happen
-                    INTERNAL_ERROR(AP_InternalError::error_t::flow_of_control);
-                }
+                // constrain output so that motor never fully stops
+                 _servo4_out = constrain_float(_servo4_out, -0.9f, 1.0f);
                 // output yaw servo to tail rsc
-                rc_write(AP_MOTORS_MOT_4, calculate_ddfp_output(thr_lin.thrust_to_actuator(constrain_float(servo_out, 0.0f, 1.0f))));
+                rc_write_angle(AP_MOTORS_MOT_4, _servo4_out * YAW_SERVO_MAX_ANGLE);
             }
             break;
         case SpoolState::SPOOLING_DOWN:
             // sends idle output to motors and wait for rotor to stop
             update_motor_control(ROTOR_CONTROL_IDLE);
+            //JH 05_22_23
+             rc_write_angle(AP_MOTORS_MOT_6, -YAW_SERVO_MAX_ANGLE);
+             rc_write_angle(AP_MOTORS_MOT_7, -YAW_SERVO_MAX_ANGLE);
+             rc_write_angle(AP_MOTORS_MOT_9, -YAW_SERVO_MAX_ANGLE);
+             rc_write_angle(AP_MOTORS_MOT_10, -YAW_SERVO_MAX_ANGLE);
+             //NSE
+            rc_write_angle(AP_MOTORS_MOT_11, - YAW_SERVO_MAX_ANGLE);
+            rc_write_angle(AP_MOTORS_MOT_12, - YAW_SERVO_MAX_ANGLE); 
+            //
             if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CW || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CCW){
-                rc_write(AP_MOTORS_MOT_4, calculate_ddfp_output(0.0f));
+                rc_write_angle(AP_MOTORS_MOT_4, -YAW_SERVO_MAX_ANGLE);
             }
             break;
-
+            check_init = 1;
     }
-}
-
-// calculate the motor output for DDFP tails from yaw_out
-uint16_t AP_MotorsHeli_Single::calculate_ddfp_output(float yaw_out)
-{
-    uint16_t ret = _ddfp_pwm_min + (_ddfp_pwm_max - _ddfp_pwm_min) * yaw_out;
-    return ret;
 }
 
 // servo_test - move servos through full range of movement
